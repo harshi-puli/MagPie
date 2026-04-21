@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Personal config
+config.yaml
+
+# Python
+__pycache__/
+*.pyc
+.mag/
+venv/
+.venv/
+
+# Vector DB (gets big)
+chroma_db/
+*.db
+
+# Mac
+.DS_Store
+
+# Node (for Obsidian plugin later)
+node_modules/
+dist/
