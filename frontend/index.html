@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MagPie</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --ink:       #0e0e0e;
+      --paper:     #f5f0e8;
+      --cream:     #ede8de;
+      --teal:      #1a6b5a;
+      --teal-light:#e8f5f1;
+      --amber:     #c97a20;
+      --amber-light:#fdf3e3;
+      --red:       #c0392b;
+      --muted:     #6b6457;
+      --border:    #d4cdc0;
+      --shadow:    0 2px 16px rgba(14,14,14,0.08);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: 'Syne', sans-serif;
+    }
+
+    /* ── NOISE TEXTURE OVERLAY ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    #app { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* ── HEADER ── */
+    header {
+      padding: 28px 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      background: rgba(245,240,232,0.9);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .logo-bird {
+      font-size: 28px;
+      animation: bob 3s ease-in-out infinite;
+    }
+
+    @keyframes bob {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+
+    .logo-name {
+      font-family: 'Instrument Serif', serif;
+      font-size: 28px;
+      letter-spacing: -0.5px;
+      color: var(--ink);
+    }
+
+    .logo-name em {
+      font-style: italic;
+      color: var(--teal);
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 100px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border: 1.5px solid var(--border);
+      background: var(--cream);
+      transition: all 0.3s;
+    }
+
+    .status-pill.ok { border-color: var(--teal); background: var(--teal-light); color: var(--teal); }
+    .status-pill.error { border-color: var(--red); background: #fdecea; color: var(--red); }
+
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .status-pill.ok .status-dot { animation: pulse 2s ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.3; }
+    }
+
+    /* ── MAIN ── */
+    main {
+      flex: 1;
+      max-width: 860px;
+      margin: 0 auto;
+      width: 100%;
+      padding: 64px 32px;
+    }
+
+    /* ── HERO ── */
+    .hero {
+      text-align: center;
+      margin-bottom: 56px;
+    }
+
+    .hero h1 {
+      font-family: 'Instrument Serif', serif;
+      font-size: clamp(40px, 6vw, 64px);
+      line-height: 1.1;
+      letter-spacing: -1px;
+      margin-bottom: 16px;
+    }
+
+    .hero h1 span { color: var(--teal); font-style: italic; }
+
+    .hero p {
+      font-size: 16px;
+      color: var(--muted);
+      max-width: 480px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    /* ── CRAWL BOX ── */
+    .crawl-box {
+      background: white;
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: var(--shadow);
+      margin-bottom: 48px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .url-input {
+      flex: 1;
+      padding: 14px 18px;
+      font-family: 'DM Mono', monospace;
+      font-size: 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      background: var(--paper);
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .url-input:focus { border-color: var(--teal); }
+    .url-input::placeholder { color: var(--muted); }
+
+    .crawl-btn {
+      padding: 14px 28px;
+      background: var(--teal);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-family: 'Syne', sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .crawl-btn:hover:not(:disabled) { background: #155a4a; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(26,107,90,0.3); }
+    .crawl-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .folder-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .folder-row input {
+      padding: 6px 12px;
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      border: 1.5px solid var(--border);
+      border-radius: 6px;
+      background: var(--paper);
+      color: var(--ink);
+      outline: none;
+      width: 200px;
+    }
+
+    /* ── RESULT CARD ── */
+    .result-card {
+      background: white;
+      border: 1.5px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 32px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
+      animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .result-card.success { border-left: 4px solid var(--teal); }
+    .result-card.error   { border-left: 4px solid var(--red); background: #fdecea; }
+
+    .result-title {
+      font-family: 'Instrument Serif', serif;
+      font-size: 22px;
+      margin-bottom: 8px;
+      color: var(--ink);
+    }
+
+    .result-summary {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+
+    .result-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .tag {
+      padding: 3px 10px;
+      background: var(--cream);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      font-size: 12px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+    }
+
+    .link-chip {
+      padding: 3px 10px;
+      background: var(--teal-light);
+      border: 1px solid rgba(26,107,90,0.2);
+      border-radius: 100px;
+      font-size: 12px;
+      font-family: 'DM Mono', monospace;
+      color: var(--teal);
+    }
+
+    .link-chip::before { content: '[['; opacity: 0.5; }
+    .link-chip::after  { content: ']]'; opacity: 0.5; }
+
+    .vault-path {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 6px 10px;
+      background: var(--cream);
+      border-radius: 6px;
+      display: inline-block;
+    }
+
+    /* ── HISTORY ── */
+    .section-title {
+      font-family: 'Instrument Serif', serif;
+      font-size: 24px;
+      margin-bottom: 20px;
+      color: var(--ink);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    /* ── EMPTY STATE ── */
+    .empty {
+      text-align: center;
+      padding: 48px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .empty-icon { font-size: 40px; margin-bottom: 12px; }
+
+    /* ── ERROR BANNER ── */
+    .error-banner {
+      background: #fdecea;
+      border: 1.5px solid #f5c6c2;
+      border-radius: 10px;
+      padding: 14px 18px;
+      font-size: 14px;
+      color: var(--red);
+      margin-bottom: 16px;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo">
+      <span class="logo-bird">🐦‍⬛</span>
+      <span class="logo-name">Mag<em>Pie</em></span>
+    </div>
+    <div id="status-pill" class="status-pill">
+      <div class="status-dot"></div>
+      <span id="status-text">Connecting…</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <h1>Turn the web into<br><span>your knowledge base</span></h1>
+      <p>Paste any URL. MagPie crawls it, summarizes it with Claude, and saves it to your Obsidian vault — with wikilinks automatically woven in.</p>
+    </div>
+
+    <div class="crawl-box">
+      <div class="input-row">
+        <input
+          id="url-input"
+          class="url-input"
+          type="url"
+          placeholder="https://example.com/article"
+          autofocus
+        />
+        <button id="crawl-btn" class="crawl-btn" onclick="handleCrawl()">
+          <span id="btn-label">Crawl</span>
+        </button>
+      </div>
+      <div class="folder-row">
+        Save to vault folder:
+        <input id="folder-input" type="text" placeholder="Web Clippings" />
+      </div>
+    </div>
+
+    <div id="error-banner" class="error-banner" style="display:none"></div>
+
+    <div id="results-section" style="display:none">
+      <div class="section-title">Latest</div>
+      <div id="results"></div>
+    </div>
+
+    <div id="empty" class="empty">
+      <div class="empty-icon">🪶</div>
+      <div>No notes crawled yet — paste a URL above to get started.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+  const API = 'http://localhost:8000';
+  let history = [];
+
+  // ── Status check ──────────────────────────────────────────────────────────
+  async function checkStatus() {
+    const pill = document.getElementById('status-pill');
+    const text = document.getElementById('status-text');
+    try {
+      const res = await fetch(`${API}/status`);
+      const data = await res.json();
+      const ok = data.obsidian_connected && data.anthropic_configured;
+      pill.className = `status-pill ${ok ? 'ok' : 'error'}`;
+      text.textContent = ok
+        ? `Obsidian · ${data.model}`
+        : (!data.obsidian_connected ? 'Obsidian offline' : 'API key missing');
+    } catch {
+      pill.className = 'status-pill error';
+      text.textContent = 'API offline — run uvicorn api.server:app';
+    }
+  }
+
+  // ── Crawl ─────────────────────────────────────────────────────────────────
+  async function handleCrawl() {
+    const url = document.getElementById('url-input').value.trim();
+    const folder = document.getElementById('folder-input').value.trim() || undefined;
+    if (!url) return;
+
+    const btn = document.getElementById('crawl-btn');
+    const label = document.getElementById('btn-label');
+    const error = document.getElementById('error-banner');
+
+    btn.disabled = true;
+    label.innerHTML = '<div class="spinner"></div> Crawling…';
+    error.style.display = 'none';
+
+    try {
+      const res = await fetch(`${API}/crawl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, folder }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Crawl failed');
+      }
+
+      const data = await res.json();
+      history.unshift({ ...data, crawled_at: new Date() });
+      renderResults();
+      document.getElementById('url-input').value = '';
+    } catch (e) {
+      error.textContent = `✗ ${e.message}`;
+      error.style.display = 'block';
+    } finally {
+      btn.disabled = false;
+      label.textContent = 'Crawl';
+    }
+  }
+
+  // Enter key to submit
+  document.getElementById('url-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') handleCrawl();
+  });
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  function renderResults() {
+    const container = document.getElementById('results');
+    const section = document.getElementById('results-section');
+    const empty = document.getElementById('empty');
+
+    if (history.length === 0) {
+      section.style.display = 'none';
+      empty.style.display = 'block';
+      return;
+    }
+
+    section.style.display = 'block';
+    empty.style.display = 'none';
+
+    container.innerHTML = history.map(item => `
+      <div class="result-card ${item.success ? 'success' : 'error'}">
+        <div class="result-title">${escHtml(item.title)}</div>
+        <div class="result-summary">${escHtml(item.summary)}</div>
+        <div class="result-meta">
+          ${(item.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}
+        </div>
+        <div class="result-meta">
+          ${(item.links || []).slice(0, 6).map(l => `<span class="link-chip">${escHtml(l)}</span>`).join('')}
+        </div>
+        <span class="vault-path">📂 ${escHtml(item.vault_path)}</span>
+      </div>
+    `).join('');
+  }
+
+  function escHtml(str) {
+    return String(str || '')
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  checkStatus();
+  setInterval(checkStatus, 15000);
+  renderResults();
+</script>
+</body>
+</html>

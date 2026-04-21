@@ -7,17 +7,23 @@ config.yaml
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .mag/
 venv/
 .venv/
+*.egg-info/
 
-# Vector DB (gets big)
+# Vector DB
 chroma_db/
 *.db
+
+# Node / Obsidian plugin
+node_modules/
+dist/
 
 # Mac
 .DS_Store
 
-# Node (for Obsidian plugin later)
-node_modules/
-dist/
+# Editors
+.vscode/
+.idea/
