@@ -1,4 +1,4 @@
-# Obsidian Web Crawler
+# MagPie: Obsidian Web Crawler
 
 Crawl web pages → summarize with Claude → save as notes in Obsidian.
 
