@@ -1,0 +1,10 @@
+{
+  "id": "magpie-crawler",
+  "name": "MagPie",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Crawl any URL and save it as a linked note in your vault using AI.",
+  "author": "You",
+  "authorUrl": "https://github.com/you/magpie",
+  "isDesktopOnly": true
+}
