@@ -185,6 +185,19 @@
           <label><input type="checkbox" id="crawl-history" checked> Save to history</label>
           <label>Folder: <input type="text" id="crawl-folder" placeholder="Web Clippings" /></label>
         </div>
+        <div class="options-row" style="margin-top:10px">
+          <span style="font-weight:700;color:var(--ink);font-size:13px">Obsidian note depth:</span>
+          <label style="cursor:pointer">
+            <input type="radio" name="crawl-mode" value="surface" checked>
+            🌊 <strong>Surface</strong>
+            <span style="font-size:11px;color:var(--muted)">— summary + tags + wikilinks</span>
+          </label>
+          <label style="cursor:pointer">
+            <input type="radio" name="crawl-mode" value="deep_dive">
+            🔬 <strong>Deep Dive</strong>
+            <span style="font-size:11px;color:var(--muted)">— + key terms, ideas, questions, sentiment, stats</span>
+          </label>
+        </div>
         <div id="tier-toggle" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
           <div class="options-row" style="margin-bottom:10px">
             <label style="font-weight:700;color:var(--ink)">
@@ -384,10 +397,13 @@ function renderArticleCard(d) {
   const tierBadge = d.tier === 'claude'
     ? '<span style="font-size:11px;background:var(--teal-light);color:var(--teal);padding:2px 8px;border-radius:100px;font-weight:700;margin-left:8px">✨ Claude</span>'
     : '<span style="font-size:11px;background:var(--cream);color:var(--muted);padding:2px 8px;border-radius:100px;font-weight:700;margin-left:8px">Free</span>';
+  const modeBadge = d.mode === 'deep_dive'
+    ? '<span style="font-size:11px;background:var(--purple-light);color:var(--purple);padding:2px 8px;border-radius:100px;font-weight:700;margin-left:6px">🔬 Deep Dive</span>'
+    : '<span style="font-size:11px;background:var(--cream);color:var(--muted);padding:2px 8px;border-radius:100px;font-weight:700;margin-left:6px">🌊 Surface</span>';
   const tags = (d.tags||[]).map(t=>`<span class="chip tag">${esc(t)}</span>`).join('');
   const links = (d.links||[]).slice(0,6).map(l=>`<span class="chip link">${esc(l)}</span>`).join('');
   return `<div class="result-card article">
-    <div class="card-title">${esc(d.title)}${tierBadge}</div>
+    <div class="card-title">${esc(d.title)}${tierBadge}${modeBadge}</div>
     <div class="card-summary">${esc(d.summary)}</div>
     <div class="chips">${tags}</div>
     <div class="chips">${links}</div>

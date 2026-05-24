@@ -65,6 +65,8 @@ class CrawlRequest(BaseModel):
     save_history: bool = True
     session_id: Optional[str] = None
     anthropic_key: Optional[str] = None   # user's own key for pro tier
+    mode: str = "surface"                 # "surface" | "deep_dive"
+    mode: str = "surface"                 # "surface" | "deep_dive" 
 
 
 class ProjectRequest(BaseModel):
@@ -105,7 +107,6 @@ def status():
     except Exception:
         pass
 
-    # Check spaCy is available for free tier
     free_tier_ok = False
     try:
         import spacy
@@ -128,7 +129,7 @@ async def crawl(req: CrawlRequest):
     """
     Crawl any URL.
     - Free tier: spaCy + TextRank (no API key needed)
-    - Pro tier: Claude summarization (pass anthropic_key or set in .env)
+    - Pro tier: Claude summarization (pass anthropic_key explicitly)
     """
     cfg = get_config()
     folder = req.folder or cfg["obsidian"]["vault_folder"]
@@ -139,82 +140,110 @@ async def crawl(req: CrawlRequest):
         raise HTTPException(status_code=422, detail=f"Crawl failed: {crawl_result.error}")
 
     # 2. Decide which processor to use
-    anthropic_key = req.anthropic_key  # ONLY use key if user explicitly passed one
-    use_claude = bool(anthropic_key)   # never auto-use from .env
+    # ONLY use Claude if the user explicitly passed their key from the UI
+    anthropic_key = req.anthropic_key
+    use_claude = bool(anthropic_key)
 
     if use_claude:
-            original_key = os.environ.get("ANTHROPIC_API_KEY")
-            if req.anthropic_key:
-                os.environ["ANTHROPIC_API_KEY"] = req.anthropic_key
+        # ── Pro tier: Claude ──────────────────────────────────────────────────
+        original_key = os.environ.get("ANTHROPIC_API_KEY")
+        os.environ["ANTHROPIC_API_KEY"] = anthropic_key
 
-            processed = process_content(
-                raw_markdown=crawl_result.markdown,
-                source_url=req.url,
-                prompt_template=cfg["llm"]["prompt"],
-                model=cfg["llm"]["model"],
-            )
+        processed = process_content(
+            raw_markdown=crawl_result.markdown,
+            source_url=req.url,
+            prompt_template=cfg["llm"]["prompt"],
+            model=cfg["llm"]["model"],
+        )
 
-            if req.anthropic_key:
-                if original_key:
-                    os.environ["ANTHROPIC_API_KEY"] = original_key
-                else:
-                    del os.environ["ANTHROPIC_API_KEY"]
+        # Restore original key
+        if original_key:
+            os.environ["ANTHROPIC_API_KEY"] = original_key
+        else:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
 
-            if not processed.success:
-                raise HTTPException(status_code=422, detail=f"Claude error: {processed.error}")
+        if not processed.success:
+            raise HTTPException(status_code=422, detail=f"Claude error: {processed.error}")
 
-            title, summary, tags, links, content = (
-                processed.title, processed.summary, processed.tags,
-                processed.links, processed.content
-            )
-            tier          = "claude"
-            key_terms     = []        # ✅ make sure these are inside the if block
-            main_ideas    = []
-            entities      = []
-            related_links = []
-            co_occurrences = []
-            stats         = {}
-            sentiment_arc = []
-            questions     = []
+        title         = processed.title
+        summary       = processed.summary
+        tags          = processed.tags
+        links         = processed.links
+        content       = processed.content
+        tier          = "claude"
+        key_terms     = []
+        main_ideas    = []
+        entities      = []
+        related_links = []
+        co_occurrences = []
+        stats         = {}
+        sentiment_arc = []
+        questions     = []
 
     else:
+        # ── Free tier: spaCy + TextRank ───────────────────────────────────────
         result = process_free(crawl_result.markdown, source_url=req.url)
-        if not result.success:
-            raise HTTPException(status_code=422, detail=f"NLP error: {result.error}")
 
-        title, summary, tags, links, content = (
-            result.title, result.summary, result.tags,
-            result.links, result.content
-        )
-        tier           = "free"
-        key_terms      = result.key_terms
-        main_ideas     = result.main_ideas
-        entities       = result.entities
-        related_links  = result.related_links
+        if not result.success:
+            # Return a friendly error card instead of crashing
+            # so the user sees WHY it failed (paywall, nav-only, etc.)
+            return {
+                "type": "article",
+                "tier": "free",
+                "url": req.url,
+                "title": result.title or req.url.split("/")[-1] or "Page",
+                "summary": f"⚠️ {result.error}",
+                "tags": [], "links": [], "key_terms": [], "main_ideas": [],
+                "entities": [], "related_links": [], "co_occurrences": [],
+                "stats": {}, "sentiment_arc": [], "questions": [],
+                "vault_path": "",
+                "crawled_at": datetime.utcnow().isoformat(),
+                "success": False,
+                "error": result.error,
+            }
+
+        title         = result.title
+        summary       = result.summary
+        tags          = result.tags
+        links         = result.links
+        content       = result.content
+        tier          = "free"
+        key_terms     = result.key_terms
+        main_ideas    = result.main_ideas
+        entities      = result.entities
+        related_links = result.related_links
         co_occurrences = result.co_occurrences
-        stats          = result.stats
-        sentiment_arc  = result.sentiment_arc
-        questions      = result.questions
+        stats         = result.stats
+        sentiment_arc = result.sentiment_arc
+        questions     = result.questions
 
     # 3. Save to Obsidian
-    note = Note(
-        title=title,
-        content=content,
-        folder=folder,
-        tags=tags,
-        links=links,
-        source_url=req.url,
-        summary=summary,
-    )
-    obsidian = get_obsidian_client(cfg)
     vault_path = ""
     try:
-        result = obsidian.create_note(note)
-        vault_path = result["path"]
+        note = Note(
+            title=title,
+            content=content,
+            folder=folder,
+            tags=tags,
+            links=links,
+            source_url=req.url,
+            summary=summary,
+            mode=req.mode,
+            key_terms=key_terms,
+            main_ideas=main_ideas,
+            questions=questions,
+            sentiment_arc=sentiment_arc,
+            stats=stats,
+            related_links=related_links,
+            entities=entities,
+        )
+        obsidian = get_obsidian_client(cfg)
+        save_result = obsidian.create_note(note)
+        vault_path = save_result["path"]
     except Exception as e:
-        # Don't hard fail if Obsidian isn't running
         vault_path = f"(Obsidian offline: {e})"
 
+    # 4. Build history entry
     entry = {
         "type": "article",
         "tier": tier,
@@ -233,6 +262,8 @@ async def crawl(req: CrawlRequest):
         "questions": questions,
         "vault_path": vault_path,
         "crawled_at": datetime.utcnow().isoformat(),
+        "mode": req.mode,
+        "mode": req.mode,
         "success": True,
     }
 
@@ -311,8 +342,8 @@ def analyze_project(req: ProjectRequest):
         )
         obsidian = get_obsidian_client(cfg)
         try:
-            result = obsidian.create_note(note)
-            vault_path = result["path"]
+            save_result = obsidian.create_note(note)
+            vault_path = save_result["path"]
         except Exception:
             pass
 
@@ -363,12 +394,6 @@ def clear_history(session_id: str):
 
 @app.get("/graph/{session_id}")
 def get_graph(session_id: str):
-    """
-    Clustered D3 graph.
-    Articles: root -> flat concept nodes
-    Projects: root -> cluster nodes (Tech Stack, Features, File Structure, Contributors)
-              each cluster -> its children
-    """
     entries = _history.get(session_id, [])
     nodes, edges = [], []
     seen_ids = {}
@@ -401,7 +426,7 @@ def get_graph(session_id: str):
         })
 
         if entry_type == "article":
-            # ── Key Terms cluster ─────────────────────────────────────────────
+            # Key Terms cluster
             key_terms = entry.get("key_terms") or []
             term_node_ids = {}
             if key_terms:
@@ -413,11 +438,8 @@ def get_graph(session_id: str):
                     term_node_ids[term] = lid
                     edges.append({"source": cid, "target": lid, "cluster": "terms"})
 
-            # ── Co-occurrence edges between term nodes ─────────────────────────
-            # This is the graph magic — terms that appear near each other
-            # get direct edges between them, weighted by strength
-            co_occurrences = entry.get("co_occurrences") or []
-            for co in co_occurrences:
+            # Co-occurrence edges
+            for co in (entry.get("co_occurrences") or []):
                 ta, tb = co.get("term_a"), co.get("term_b")
                 if ta in term_node_ids and tb in term_node_ids:
                     edges.append({
@@ -427,7 +449,7 @@ def get_graph(session_id: str):
                         "strength": co.get("strength", 0.5),
                     })
 
-            # ── Main Ideas cluster ─────────────────────────────────────────────
+            # Main Ideas cluster
             main_ideas = entry.get("main_ideas") or []
             if main_ideas:
                 cid = make_id("cluster")
@@ -437,7 +459,7 @@ def get_graph(session_id: str):
                     lid = get_or_create_leaf(idea, "idea_item")
                     edges.append({"source": cid, "target": lid, "cluster": "ideas"})
 
-            # ── Key Questions cluster ──────────────────────────────────────────
+            # Questions cluster
             questions = entry.get("questions") or []
             if questions:
                 cid = make_id("cluster")
@@ -447,39 +469,37 @@ def get_graph(session_id: str):
                     lid = get_or_create_leaf(q, "question_item")
                     edges.append({"source": cid, "target": lid, "cluster": "questions"})
 
-            # ── Sentiment Arc cluster ──────────────────────────────────────────
+            # Sentiment Arc cluster
             sentiment_arc = entry.get("sentiment_arc") or []
             if sentiment_arc:
                 cid = make_id("cluster")
                 nodes.append({"id": cid, "label": "🌡 Sentiment", "type": "cluster", "url": "", "summary": "Emotional arc", "cluster": "sentiment"})
                 edges.append({"source": root_id, "target": cid, "cluster": "sentiment"})
-                # Chain sections together to show arc progression
                 prev_lid = None
                 for section in sentiment_arc:
-                    label = section.get("display", section.get("section",""))
+                    label = section.get("display", section.get("section", ""))
                     lid = get_or_create_leaf(label, "sentiment_item")
                     edges.append({"source": cid, "target": lid, "cluster": "sentiment"})
                     if prev_lid:
                         edges.append({"source": prev_lid, "target": lid, "cluster": "sentiment_arc"})
                     prev_lid = lid
 
-            # ── Article Stats cluster ──────────────────────────────────────────
+            # Stats cluster
             stats = entry.get("stats") or {}
             if stats:
                 cid = make_id("cluster")
                 nodes.append({"id": cid, "label": "📊 Stats", "type": "cluster", "url": "", "summary": f"{stats.get('reading_level','?')} level", "cluster": "stats"})
                 edges.append({"source": root_id, "target": cid, "cluster": "stats"})
-                stat_items = [
+                for s in [
                     f"📖 {stats.get('reading_level','?')} level",
                     f"⏱ {stats.get('estimated_read_minutes','?')} min read",
                     f"📝 {stats.get('word_count','?')} words",
                     f"🧠 Richness: {stats.get('vocabulary_richness','?')}",
-                ]
-                for s in stat_items:
+                ]:
                     lid = get_or_create_leaf(s, "stat_item")
                     edges.append({"source": cid, "target": lid, "cluster": "stats"})
 
-            # ── Entities cluster ───────────────────────────────────────────────
+            # Entities cluster
             entities = entry.get("entities") or []
             if entities:
                 cid = make_id("cluster")
@@ -489,17 +509,17 @@ def get_graph(session_id: str):
                     lid = get_or_create_leaf(ent, "entity_item")
                     edges.append({"source": cid, "target": lid, "cluster": "entities"})
 
-            # ── Related Links cluster ──────────────────────────────────────────
+            # Related Links cluster
             related_links = entry.get("related_links") or []
             if related_links:
                 cid = make_id("cluster")
                 nodes.append({"id": cid, "label": "🔗 Related Links", "type": "cluster", "url": "", "summary": f"{len(related_links)} links", "cluster": "links"})
                 edges.append({"source": root_id, "target": cid, "cluster": "links"})
                 for lnk in related_links:
-                    lid = get_or_create_leaf(lnk.get("label","Link"), "link_item", lnk.get("url",""))
+                    lid = get_or_create_leaf(lnk.get("label", "Link"), "link_item", lnk.get("url", ""))
                     edges.append({"source": cid, "target": lid, "cluster": "links"})
 
-            # ── Shared concept nodes (cross-entry wikilinks) ───────────────────
+            # Shared concept nodes (cross-entry wikilinks)
             for concept in (entry.get("links") or [])[:6]:
                 lid = get_or_create_leaf(concept, "concept")
                 edges.append({"source": root_id, "target": lid, "cluster": None})
@@ -529,11 +549,11 @@ def get_graph(session_id: str):
             file_structure = entry.get("file_structure") or []
             if file_structure:
                 cid = make_id("cluster")
-                nodes.append({"id": cid, "label": "Structure", "type": "cluster", "url": entry.get("url",""), "summary": f"{len(file_structure)} entries", "cluster": "files"})
+                nodes.append({"id": cid, "label": "Structure", "type": "cluster", "url": entry.get("url", ""), "summary": f"{len(file_structure)} entries", "cluster": "files"})
                 edges.append({"source": root_id, "target": cid, "cluster": "files"})
                 for f in file_structure[:10]:
                     label = f"{f.get('emoji','')} {f.get('name','')}".strip()
-                    lid = get_or_create_leaf(label, "file_item", f.get("url",""))
+                    lid = get_or_create_leaf(label, "file_item", f.get("url", ""))
                     edges.append({"source": cid, "target": lid, "cluster": "files"})
 
             # Contributors
@@ -543,7 +563,7 @@ def get_graph(session_id: str):
                 nodes.append({"id": cid, "label": "Contributors", "type": "cluster", "url": "", "summary": f"{len(contributors)} contributors", "cluster": "people"})
                 edges.append({"source": root_id, "target": cid, "cluster": "people"})
                 for c in contributors[:5]:
-                    lid = get_or_create_leaf(c["login"], "contributor", c.get("url",""))
+                    lid = get_or_create_leaf(c["login"], "contributor", c.get("url", ""))
                     edges.append({"source": cid, "target": lid, "cluster": "people"})
 
             # Key concepts (cross-entry)

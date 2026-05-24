@@ -13,13 +13,15 @@ import {
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 interface MagPieSettings {
-  apiUrl: string;       // FastAPI backend URL
+  apiUrl: string;
   defaultFolder: string;
+  defaultMode: string;  // "surface" | "deep_dive"
 }
 
 const DEFAULT_SETTINGS: MagPieSettings = {
   apiUrl: "http://localhost:8000",
   defaultFolder: "Web Clippings",
+  defaultMode: "surface",
 };
 
 // ── Plugin ────────────────────────────────────────────────────────────────────
@@ -122,13 +124,28 @@ class CrawlModal extends Modal {
 
     // Folder input
     const folderRow = contentEl.createDiv();
-    folderRow.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:16px;font-size:13px;color:#666;";
+    folderRow.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;color:#666;";
     folderRow.createSpan({ text: "Save to:" });
     const folderInput = folderRow.createEl("input", {
       type: "text",
       value: this.settings.defaultFolder,
     });
     folderInput.style.cssText = "flex:1;padding:6px 10px;font-size:13px;border:1.5px solid #ccc;border-radius:6px;";
+
+    // Mode selector
+    const modeRow = contentEl.createDiv();
+    modeRow.style.cssText = "display:flex;align-items:center;gap:14px;margin-bottom:16px;font-size:13px;";
+    modeRow.createSpan({ text: "Note depth:", attr: { style: "color:#666;font-weight:600;" } });
+    const surfaceLabel = modeRow.createEl("label");
+    surfaceLabel.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+    const surfaceRadio = surfaceLabel.createEl("input", { type: "radio", attr: { name: "mode", value: "surface" } });
+    if (this.settings.defaultMode === "surface") surfaceRadio.checked = true;
+    surfaceLabel.createSpan({ text: "🌊 Surface" });
+    const deepLabel = modeRow.createEl("label");
+    deepLabel.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+    const deepRadio = deepLabel.createEl("input", { type: "radio", attr: { name: "mode", value: "deep_dive" } });
+    if (this.settings.defaultMode === "deep_dive") deepRadio.checked = true;
+    deepLabel.createSpan({ text: "🔬 Deep Dive" });
 
     // Status area
     const status = contentEl.createDiv();
@@ -154,7 +171,11 @@ class CrawlModal extends Modal {
           url: `${this.settings.apiUrl}/crawl`,
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url, folder: folderInput.value.trim() }),
+          body: JSON.stringify({
+            url,
+            folder: folderInput.value.trim(),
+            mode: deepRadio.checked ? "deep_dive" : "surface",
+          }),
         });
 
         const data = response.json;
@@ -221,6 +242,20 @@ class MagPieSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.defaultFolder)
           .onChange(async (value) => {
             this.plugin.settings.defaultFolder = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Default note depth")
+      .setDesc("Surface: clean summary. Deep Dive: includes key terms, ideas, questions, sentiment, stats.")
+      .addDropdown((drop) =>
+        drop
+          .addOption("surface", "🌊 Surface")
+          .addOption("deep_dive", "🔬 Deep Dive")
+          .setValue(this.plugin.settings.defaultMode)
+          .onChange(async (value) => {
+            this.plugin.settings.defaultMode = value;
             await this.plugin.saveSettings();
           })
       );

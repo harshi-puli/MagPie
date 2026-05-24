@@ -4,6 +4,7 @@
 
 MagPie crawls any URL, summarizes it with Claude, and saves it as a beautifully linked note directly into your Obsidian vault. Over time your vault becomes a knowledge graph — notes connected by shared concepts, people, and ideas.
 
+python -m uvicorn api.backend:app --reload --port 8000
 ---
 
 ## What it does
