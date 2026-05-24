@@ -1,0 +1,12 @@
+# ── Anthropic ──────────────────────────────────────────
+# Get your key at: console.anthropic.com
+#VITE_ANTHROPIC_API_KEY=
+
+# ── Obsidian Local REST API ────────────────────────────
+# Obsidian → Settings → Local REST API → copy key here
+#VITE_OBSIDIAN_API_KEY=
+# ── Supabase Local REST API ────────────────────────────
+# Obsidian → Settings → Local REST API → copy key here
+#VITE_SUPABASE_URL=
+#VITE_SUPABASE_ANON_KEY=
+#VITE_API_URL=http://localhost:8000
