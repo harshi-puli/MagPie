@@ -27,3 +27,10 @@ dist/
 # Editors
 .vscode/
 .idea/
+
+#extra
+__pycache__/
+.mag/
+obsidian-plugin/node_modules/
+obsidian-plugin/dist/
+obsidian-plugin/package-lock.json
