@@ -495,13 +495,63 @@ def extract_title(markdown: str, fallback_url: str = "") -> str:
 
 
 def clean_markdown(raw: str) -> str:
+    """
+    Aggressively clean crawled markdown:
+    - Strip image URLs and raw http links
+    - Remove nav link lists, separator lines, boilerplate
+    - Remove lines that are mostly URLs or dashes
+    """
+    boilerplate = {
+        "sign in","sign up","subscribe","get started","log in","login",
+        "open in app","follow","share","listen","responses","more from",
+        "written by","clap","read more","related stories","also published",
+        "member-only story","membership","upgrade","already a member",
+    }
+
     lines = raw.splitlines()
-    cleaned = [
-        l for l in lines
-        if not re.match(r'^\s*(\[.+?\]\(.+?\)\s*[|·•]\s*){2,}', l)
-        and not re.match(r'^\s*[-=_*]{3,}\s*$', l)
-    ]
-    return re.sub(r'\n{3,}', '\n\n', '\n'.join(cleaned)).strip()
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            cleaned.append("")
+            continue
+        if re.match(r"^[-=_*·•]{3,}$", stripped):
+            continue
+        if re.match(r"^\s*(\[.+?\]\(.+?\)\s*[|·•]\s*){2,}", line):
+            continue
+        if re.match(r"^https?://\S+$", stripped):
+            continue
+        urls_in_line = re.findall(r"https?://\S+", stripped)
+        url_chars = sum(len(u) for u in urls_in_line)
+        if url_chars > len(stripped) * 0.5 and len(stripped) > 40:
+            continue
+        dash_ratio = stripped.count("-") / max(len(stripped), 1)
+        if dash_ratio > 0.4 and len(stripped) > 10:
+            continue
+        lower = stripped.lower()
+        if any(bp in lower for bp in boilerplate) and len(stripped.split()) < 8:
+            continue
+        line = re.sub(r"!\[([^\]]*)\]\([^)]+\)", "", line)
+        line = re.sub(r"https?://[^\s\)\"\']{20,}", "", line)
+        if not line.strip():
+            continue
+        cleaned.append(line)
+
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned)).strip()
+
+
+def check_content_quality(text: str) -> tuple[bool, str]:
+    """Check if crawled content is actually readable article text."""
+    words = re.findall(r"\b[a-zA-Z]{3,}\b", text)
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if len(s.split()) > 5]
+    if len(words) < 50:
+        return False, "Too little text — page may be paywalled, a homepage, or blocked"
+    if len(sentences) < 3:
+        return False, "Not enough readable sentences — content may be nav-only or blocked"
+    url_tokens = re.findall(r"https?://\S+", text)
+    if len(url_tokens) > len(words) * 0.3:
+        return False, "Content is mostly URLs — page likely returned nav/boilerplate only"
+    return True, ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -537,6 +587,19 @@ def process_free(raw_markdown: str, source_url: str = "") -> NLPResult:
         # 1. Clean
         content = clean_markdown(raw_markdown)
         plain = re.sub(r'[#*`\[\]()>]', ' ', content)
+
+        # 1b. Quality check — catch paywalls / nav-only pages early
+        is_good, reason = check_content_quality(plain)
+        if not is_good:
+            return NLPResult(
+                title=extract_title(raw_markdown, source_url),
+                summary=f"⚠️ {reason}",
+                tags=[], links=[], content=content,
+                key_terms=[], main_ideas=[], entities=[], related_links=[],
+                co_occurrences=[], stats={}, sentiment_arc=[], questions=[],
+                success=False,
+                error=reason,
+            )
 
         # 2. Title
         title = extract_title(raw_markdown, source_url)

@@ -139,40 +139,45 @@ async def crawl(req: CrawlRequest):
         raise HTTPException(status_code=422, detail=f"Crawl failed: {crawl_result.error}")
 
     # 2. Decide which processor to use
-    anthropic_key = req.anthropic_key or os.environ.get("ANTHROPIC_API_KEY", "")
-    use_claude = bool(anthropic_key)
+    anthropic_key = req.anthropic_key  # ONLY use key if user explicitly passed one
+    use_claude = bool(anthropic_key)   # never auto-use from .env
 
     if use_claude:
-        # ── Pro tier: Claude ──────────────────────────────────────────────────
-        original_key = os.environ.get("ANTHROPIC_API_KEY")
-        if req.anthropic_key:
-            os.environ["ANTHROPIC_API_KEY"] = req.anthropic_key  # use user's key
+            original_key = os.environ.get("ANTHROPIC_API_KEY")
+            if req.anthropic_key:
+                os.environ["ANTHROPIC_API_KEY"] = req.anthropic_key
 
-        processed = process_content(
-            raw_markdown=crawl_result.markdown,
-            source_url=req.url,
-            prompt_template=cfg["llm"]["prompt"],
-            model=cfg["llm"]["model"],
-        )
+            processed = process_content(
+                raw_markdown=crawl_result.markdown,
+                source_url=req.url,
+                prompt_template=cfg["llm"]["prompt"],
+                model=cfg["llm"]["model"],
+            )
 
-        if req.anthropic_key:
-            # Restore original key
-            if original_key:
-                os.environ["ANTHROPIC_API_KEY"] = original_key
-            else:
-                del os.environ["ANTHROPIC_API_KEY"]
+            if req.anthropic_key:
+                if original_key:
+                    os.environ["ANTHROPIC_API_KEY"] = original_key
+                else:
+                    del os.environ["ANTHROPIC_API_KEY"]
 
-        if not processed.success:
-            raise HTTPException(status_code=422, detail=f"Claude error: {processed.error}")
+            if not processed.success:
+                raise HTTPException(status_code=422, detail=f"Claude error: {processed.error}")
 
-        title, summary, tags, links, content = (
-            processed.title, processed.summary, processed.tags,
-            processed.links, processed.content
-        )
-        tier = "claude"
+            title, summary, tags, links, content = (
+                processed.title, processed.summary, processed.tags,
+                processed.links, processed.content
+            )
+            tier          = "claude"
+            key_terms     = []        # ✅ make sure these are inside the if block
+            main_ideas    = []
+            entities      = []
+            related_links = []
+            co_occurrences = []
+            stats         = {}
+            sentiment_arc = []
+            questions     = []
 
     else:
-        # ── Free tier: spaCy + TextRank ───────────────────────────────────────
         result = process_free(crawl_result.markdown, source_url=req.url)
         if not result.success:
             raise HTTPException(status_code=422, detail=f"NLP error: {result.error}")
@@ -181,7 +186,15 @@ async def crawl(req: CrawlRequest):
             result.title, result.summary, result.tags,
             result.links, result.content
         )
-        tier = "free"
+        tier           = "free"
+        key_terms      = result.key_terms
+        main_ideas     = result.main_ideas
+        entities       = result.entities
+        related_links  = result.related_links
+        co_occurrences = result.co_occurrences
+        stats          = result.stats
+        sentiment_arc  = result.sentiment_arc
+        questions      = result.questions
 
     # 3. Save to Obsidian
     note = Note(

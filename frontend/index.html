@@ -371,6 +371,16 @@ async function handleProject() {
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 function renderArticleCard(d) {
+  // Error card — page was blocked/paywalled/nav-only
+  if (!d.success) {
+    return `<div class="result-card" style="border-left:4px solid #c97a20;background:#fdf8f0">
+      <div class="card-title" style="font-size:16px">${esc(d.title)}</div>
+      <div class="card-summary" style="color:#c97a20">${esc(d.summary)}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">
+        💡 Try a direct article URL rather than a homepage. Medium, Substack, and paywalled sites may not work with the free tier.
+      </div>
+    </div>`;
+  }
   const tierBadge = d.tier === 'claude'
     ? '<span style="font-size:11px;background:var(--teal-light);color:var(--teal);padding:2px 8px;border-radius:100px;font-weight:700;margin-left:8px">✨ Claude</span>'
     : '<span style="font-size:11px;background:var(--cream);color:var(--muted);padding:2px 8px;border-radius:100px;font-weight:700;margin-left:8px">Free</span>';
