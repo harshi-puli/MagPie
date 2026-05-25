@@ -25,10 +25,19 @@ const CLUSTER_EDGE_COLORS = {
 export default function GraphView({ entries }) {
   const svgRef = useRef(null)
   const tooltipRef = useRef(null)
+  const containerRef = useRef(null)
 
   useEffect(() => {
     if (!entries?.length) return
     renderGraph()
+  }, [entries])
+
+  // Re-render on container resize
+  useEffect(() => {
+    if (!entries?.length) return
+    const ro = new ResizeObserver(() => renderGraph())
+    if (containerRef.current) ro.observe(containerRef.current)
+    return () => ro.disconnect()
   }, [entries])
 
   function buildGraphData(entries) {
@@ -56,7 +65,7 @@ export default function GraphView({ entries }) {
         const termIds = {}
         if (keyTerms.length) {
           const cid = mkId('cluster')
-          nodes.push({ id: cid, label: '🔑 Key Terms', type: 'cluster', url: '', summary: '', cluster: 'terms' })
+          nodes.push({ id: cid, label: 'Key Terms', type: 'cluster', url: '', summary: '', cluster: 'terms' })
           edges.push({ source: rootId, target: cid, cluster: 'terms' })
           keyTerms.slice(0, 6).forEach(t => { const lid = leaf(t, 'term_item'); termIds[t] = lid; edges.push({ source: cid, target: lid, cluster: 'terms' }) })
         }
@@ -65,10 +74,10 @@ export default function GraphView({ entries }) {
             edges.push({ source: termIds[co.term_a], target: termIds[co.term_b], cluster: 'cooccurrence', strength: co.strength || 0.5 })
         })
         ;(entry.main_ideas || []).slice(0, 3).forEach((idea, i) => {
-          if (i === 0) { const cid = mkId('cluster'); nodes.push({ id: cid, label: '💡 Main Ideas', type: 'cluster', url: '', summary: '', cluster: 'ideas' }); edges.push({ source: rootId, target: cid, cluster: 'ideas' }) }
+          if (i === 0) { const cid = mkId('cluster'); nodes.push({ id: cid, label: 'Main Ideas', type: 'cluster', url: '', summary: '', cluster: 'ideas' }); edges.push({ source: rootId, target: cid, cluster: 'ideas' }) }
         })
         ;(entry.questions || []).slice(0, 3).forEach((q, i) => {
-          if (i === 0) { const cid = mkId('cluster'); nodes.push({ id: cid, label: '❓ Questions', type: 'cluster', url: '', summary: '', cluster: 'questions' }); edges.push({ source: rootId, target: cid, cluster: 'questions' }) }
+          if (i === 0) { const cid = mkId('cluster'); nodes.push({ id: cid, label: 'Questions', type: 'cluster', url: '', summary: '', cluster: 'questions' }); edges.push({ source: rootId, target: cid, cluster: 'questions' }) }
         })
         ;(entry.entities || []).slice(0, 5).forEach(ent => { edges.push({ source: rootId, target: leaf(ent, 'entity_item'), cluster: null }) })
         ;(entry.links || []).slice(0, 6).forEach(c => edges.push({ source: rootId, target: leaf(c, 'concept'), cluster: null }))
@@ -87,22 +96,29 @@ export default function GraphView({ entries }) {
   async function renderGraph() {
     const d3 = await import('d3')
     const svgEl = svgRef.current
-    if (!svgEl) return
+    const container = containerRef.current
+    if (!svgEl || !container) return
     svgEl.innerHTML = ''
 
     const { nodes, edges } = buildGraphData(entries)
     if (!nodes.length) return
 
-    const W = svgEl.clientWidth || 760, H = 460
+    const W = container.clientWidth || 900
+    const H = container.clientHeight || 600
+
     const svg = d3.select(svgEl)
-    const zoom = d3.zoom().scaleExtent([0.2, 4]).on('zoom', e => g.attr('transform', e.transform))
+      .attr('width', W)
+      .attr('height', H)
+
+    const zoom = d3.zoom().scaleExtent([0.1, 5]).on('zoom', e => g.attr('transform', e.transform))
     svg.call(zoom)
+
     const g = svg.append('g')
 
     svg.append('defs').append('marker')
-      .attr('id','arrow').attr('viewBox','0 -5 10 10').attr('refX', 20)
+      .attr('id', 'arrow').attr('viewBox', '0 -5 10 10').attr('refX', 20)
       .attr('markerWidth', 6).attr('markerHeight', 6).attr('orient', 'auto')
-      .append('path').attr('d','M0,-5L10,0L0,5').attr('fill','rgba(255,255,255,0.15)')
+      .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', 'rgba(255,255,255,0.15)')
 
     const link = g.append('g').selectAll('line').data(edges).join('line')
       .attr('stroke', d => d.cluster === 'cooccurrence' ? '#e8a020' : d.cluster ? (CLUSTER_EDGE_COLORS[d.cluster] || 'rgba(255,255,255,0.1)') : 'rgba(255,255,255,0.08)')
@@ -138,7 +154,7 @@ export default function GraphView({ entries }) {
       tooltip.style('opacity', '1')
         .html(`<strong style="color:#f0eff5">${d.label}</strong>${d.summary ? `<br><span style="opacity:0.7;font-size:11px">${d.summary.slice(0, 80)}…</span>` : ''}`)
     }).on('mousemove', e => {
-      const rect = svgEl.parentElement.getBoundingClientRect()
+      const rect = container.getBoundingClientRect()
       tooltip.style('left', (e.clientX - rect.left + 12) + 'px').style('top', (e.clientY - rect.top - 10) + 'px')
     }).on('mouseout', () => tooltip.style('opacity', '0'))
 
@@ -153,44 +169,76 @@ export default function GraphView({ entries }) {
         link.attr('x1', d => d.source.x).attr('y1', d => d.source.y).attr('x2', d => d.target.x).attr('y2', d => d.target.y)
         node.attr('transform', d => `translate(${d.x},${d.y})`)
       })
+
+    // Store zoom ref on svg element for external reset
+    svgEl._zoomBehavior = zoom
   }
 
   if (!entries?.length) {
     return (
-      <div style={emptyGraph}>
-        <div style={{ fontSize: 40, marginBottom: 12 }}>🕸</div>
-        <div>Crawl some articles or projects to build your knowledge graph</div>
+      <div ref={containerRef} style={emptyGraph}>
+        <i className="ti ti-topology-star" style={{ fontSize: 48, color: '#333344', marginBottom: 14 }} aria-hidden="true" />
+        <div style={{ color: '#555566', fontSize: 14 }}>Crawl some articles or projects to build your knowledge graph</div>
       </div>
     )
   }
 
   return (
-    <div style={graphWrap}>
-      <div style={graphControls}>
-        <span style={{ fontSize: 12, color: '#8888aa' }}>Scroll to zoom · Drag to pan · Click nodes to open</span>
-        <button style={graphBtn} onClick={() => {
-          import('d3').then(d3 => d3.select(svgRef.current).transition().duration(400).call(
-            d3.zoom().transform, d3.zoomIdentity
-          ))
-        }}>Reset zoom</button>
-      </div>
-      <div style={{ position: 'relative' }}>
-        <svg ref={svgRef} style={{ width: '100%', height: 460, display: 'block' }} />
-        <div ref={tooltipRef} style={tooltip} />
-      </div>
+    <div ref={containerRef} style={graphWrap}>
+      <svg ref={svgRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+      <div ref={tooltipRef} style={tooltipStyle} />
+      {/* Legend — bottom left corner */}
       <div style={legend}>
-        {[['#1a8f7a','Article'],['#7b5ea7','Project'],['#2d4a6b','Category'],['#c97a20','Entity'],['#e8a020','Co-occurrence'],['#1565c0','Link']].map(([c,l]) => (
-          <div key={l} style={legendItem}><div style={{ width: 9, height: 9, borderRadius: '50%', background: c }} />{l}</div>
+        {[
+          ['#1a8f7a', 'Article'],
+          ['#7b5ea7', 'Project'],
+          ['#2d4a6b', 'Category'],
+          ['#c97a20', 'Entity'],
+          ['#e8a020', 'Co-occurrence'],
+          ['#1565c0', 'Link'],
+        ].map(([c, l]) => (
+          <div key={l} style={legendItem}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: c, flexShrink: 0 }} />
+            {l}
+          </div>
         ))}
       </div>
+      {/* Hint — bottom right */}
+      <div style={hint}>Scroll to zoom · Drag nodes · Click to open</div>
     </div>
   )
 }
 
-const graphWrap = { background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 16, overflow: 'hidden' }
-const graphControls = { padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }
-const graphBtn = { padding: '5px 12px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, color: '#8888aa', fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }
-const tooltip = { position: 'absolute', background: '#111118', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#aaaacc', pointerEvents: 'none', opacity: 0, transition: 'opacity 0.15s', maxWidth: 220, lineHeight: 1.5, zIndex: 10 }
-const legend = { display: 'flex', flexWrap: 'wrap', gap: 16, padding: '12px 20px', borderTop: '1px solid rgba(255,255,255,0.06)' }
+const graphWrap = {
+  position: 'relative',
+  width: '100%',
+  height: '100%',
+  background: '#08080d',
+  overflow: 'hidden',
+}
+const tooltipStyle = {
+  position: 'absolute', background: '#111118',
+  border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8,
+  padding: '8px 12px', fontSize: 12, color: '#aaaacc',
+  pointerEvents: 'none', opacity: 0, transition: 'opacity 0.15s',
+  maxWidth: 220, lineHeight: 1.5, zIndex: 10,
+}
+const legend = {
+  position: 'absolute', bottom: 16, left: 16,
+  display: 'flex', flexWrap: 'wrap', gap: '6px 14px',
+  background: 'rgba(8,8,13,0.75)', backdropFilter: 'blur(8px)',
+  border: '1px solid rgba(255,255,255,0.06)',
+  borderRadius: 10, padding: '8px 14px',
+}
 const legendItem = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8888aa' }
-const emptyGraph = { height: 400, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#8888aa', fontSize: 14, background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 16 }
+const hint = {
+  position: 'absolute', bottom: 16, right: 16,
+  fontSize: 11, color: '#333344',
+  background: 'rgba(8,8,13,0.6)', borderRadius: 8, padding: '5px 10px',
+}
+const emptyGraph = {
+  width: '100%', height: '100%',
+  display: 'flex', flexDirection: 'column',
+  alignItems: 'center', justifyContent: 'center',
+  background: '#08080d',
+}

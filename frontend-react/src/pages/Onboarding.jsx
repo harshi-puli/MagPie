@@ -16,7 +16,6 @@ export default function Onboarding({ session }) {
     try {
       await upsertProfile(session.user.id, {
         obsidian_key: obsidianKey || null,
-        anthropic_key: anthropicKey || null,
         default_mode: 'surface',
       })
       navigate('/dashboard')
