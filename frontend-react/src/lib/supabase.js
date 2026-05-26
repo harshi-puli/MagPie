@@ -10,7 +10,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 export async function signInWithGoogle() {
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
-    options: { redirectTo: `${window.location.origin}/auth/callback` },
+    options: {
+      redirectTo: `${window.location.origin}/auth/callback`,
+    },
   })
   if (error) throw error
 }
@@ -27,9 +29,6 @@ export async function getSession() {
 
 // ── Profile helpers ───────────────────────────────────────────────────────────
 
-/**
- * Fetches the profile row. Returns null if not found (PGRST116).
- */
 export async function getProfile(userId) {
   const { data, error } = await supabase
     .from('profiles')
@@ -70,46 +69,55 @@ export async function upsertProfile(userId, updates) {
 
 // ── Crawl history helpers ─────────────────────────────────────────────────────
 
-/**
- * Saves a crawl result. Throws on error so callers can surface it to the user
- * instead of silently dropping data.
- */
 export async function saveCrawl(userId, entry) {
-  // Normalise fields that must be jsonb (objects/arrays-of-objects),
-  // and fields that must be text[] (arrays of strings).
-  // This prevents type-mismatch errors from the API response shape varying.
   const toTextArray = val => {
     if (!val) return []
     if (Array.isArray(val)) return val.map(v => (typeof v === 'string' ? v : String(v)))
+    if (typeof val === 'object') return Object.keys(val)  // handles languages: {Python: 1234}
     return []
   }
-  const toJsonb = val => {
-    if (!val) return null
-    // Already a plain object/array — Supabase client serialises fine
-    return val
-  }
+  const toJsonb = val => val || null
 
   const payload = {
-    user_id:        userId,
-    type:           entry.type           || 'article',
-    url:            entry.url            || '',
-    title:          entry.title          || '',
-    summary:        entry.summary        || entry.description || '',
-    tags:           toTextArray(entry.tags),
-    links:          toTextArray(entry.links),
-    key_terms:      toTextArray(entry.key_terms),
-    main_ideas:     toTextArray(entry.main_ideas),
-    questions:      toTextArray(entry.questions),
-    entities:       toTextArray(entry.entities),
-    mode:           entry.mode           || 'surface',
-    tier:           entry.tier           || 'free',
-    vault_path:     entry.vault_path     || '',
-    crawled_at:     entry.crawled_at     || new Date().toISOString(),
-    // jsonb columns
-    sentiment_arc:  toJsonb(entry.sentiment_arc),
-    stats:          toJsonb(entry.stats)          || {},
-    related_links:  toJsonb(entry.related_links)  || [],
-    co_occurrences: toJsonb(entry.co_occurrences) || [],
+    user_id:          userId,
+    type:             entry.type             || 'article',
+    url:              entry.url              || '',
+    title:            entry.title            || '',
+    summary:          entry.summary          || entry.description || '',
+    mode:             entry.mode             || 'surface',
+    tier:             entry.tier             || 'free',
+    vault_path:       entry.vault_path       || '',
+    crawled_at:       entry.crawled_at       || new Date().toISOString(),
+
+    // ── Article fields (text[]) ──────────────────────────────────────────────
+    tags:             toTextArray(entry.tags),
+    links:            toTextArray(entry.links),
+    key_terms:        toTextArray(entry.key_terms),
+    main_ideas:       toTextArray(entry.main_ideas),
+    questions:        toTextArray(entry.questions),
+    entities:         toTextArray(entry.entities),
+
+    // ── Article fields (jsonb) ───────────────────────────────────────────────
+    sentiment_arc:    toJsonb(entry.sentiment_arc)  || [],
+    stats:            toJsonb(entry.stats)           || {},
+    related_links:    toJsonb(entry.related_links)   || [],
+    co_occurrences:   toJsonb(entry.co_occurrences)  || [],
+
+    // ── Project fields (text[]) ──────────────────────────────────────────────
+    tech_stack:       toTextArray(entry.tech_stack),
+    key_concepts:     toTextArray(entry.key_concepts),
+    features:         toTextArray(entry.features),
+    languages:        toTextArray(entry.languages),
+    topics:           toTextArray(entry.topics),
+
+    // ── Project fields (jsonb) ───────────────────────────────────────────────
+    contributors:     toJsonb(entry.contributors)    || [],
+    file_structure:   toJsonb(entry.file_structure)  || [],
+
+    // ── Project scalar fields ────────────────────────────────────────────────
+    stars:            entry.stars            || 0,
+    forks:            entry.forks            || 0,
+    primary_language: entry.primary_language || '',
   }
 
   const { data, error } = await supabase
@@ -125,7 +133,7 @@ export async function saveCrawl(userId, entry) {
   return data
 }
 
-export async function getCrawls(userId, limit = 100) {
+export async function getCrawls(userId, limit = 50) {
   const { data, error } = await supabase
     .from('crawls')
     .select('*')
@@ -137,6 +145,9 @@ export async function getCrawls(userId, limit = 100) {
 }
 
 export async function deleteCrawl(id) {
-  const { error } = await supabase.from('crawls').delete().eq('id', id)
+  const { error } = await supabase
+    .from('crawls')
+    .delete()
+    .eq('id', id)
   if (error) throw error
 }
