@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { signOut, getProfile, getCrawls, saveCrawl, upsertProfile } from '../lib/supabase'
+import { signOut, getProfile, getCrawls, saveCrawl, upsertProfile, ensureProfile } from '../lib/supabase'
 import { crawlUrl, analyzeProject, checkStatus } from '../lib/api'
 import GraphView from '../components/GraphView'
 import ResultCard from '../components/ResultCard'
@@ -444,6 +444,10 @@ export default function Dashboard({ session }) {
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
+    // ensureProfile FIRST — creates the profiles row if missing,
+    // which is required by the crawls foreign key constraint.
+    await ensureProfile(user.id).catch(e => console.error('[ensureProfile]', e))
+
     const [p, crawls] = await Promise.all([
       getProfile(user.id).catch(() => null),
       getCrawls(user.id).catch(() => []),
@@ -456,8 +460,15 @@ export default function Dashboard({ session }) {
   async function handleResult(result) {
     setLatestResult(result)
     if (result.success !== false) {
-      await saveCrawl(user.id, result).catch(() => {})
-      setHistory(prev => [result, ...prev])
+      try {
+        const saved = await saveCrawl(user.id, result)
+        // Use DB row (has a real id) so future deletes/updates work
+        setHistory(prev => [saved, ...prev])
+      } catch (e) {
+        console.error('[handleResult] saveCrawl failed:', e)
+        // Still show in UI for this session
+        setHistory(prev => [{ ...result, _saveError: true }, ...prev])
+      }
     }
   }
 
