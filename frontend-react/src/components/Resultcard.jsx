@@ -10,7 +10,7 @@ export default function ResultCard({ item }) {
         <div style={cardTitle}>{item.title || 'Page'}</div>
         <div style={{ ...cardSummary, color: '#c97a20' }}>{item.summary}</div>
         <div style={{ fontSize: 12, color: '#555566', marginTop: 8 }}>
-          💡 Try a direct article URL. Paywalled or nav-only pages won't extract well.
+          Tip: Try a direct article URL. Paywalled or nav-only pages won't extract well.
         </div>
       </div>
     )
