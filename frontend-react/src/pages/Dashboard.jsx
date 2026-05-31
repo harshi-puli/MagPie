@@ -456,7 +456,7 @@ function CrawlHUD({ onClose, onResult, profile, defaultPos = { x: 28, y: 28 } })
       if (mode === 'article') {
         result = await crawlUrl({ url, folder, mode: crawlMode, anthropicKey: useClaude ? claudeKey || undefined : undefined, saveHistory: true })
       } else {
-        result = await analyzeProject({ githubUrl: url, saveToObsidian: true, saveHistory: true })
+        result = await analyzeProject({ githubUrl: url, saveToObsidian: true, saveHistory: true, anthropicKey: useClaude ? claudeKey || undefined : undefined })
       }
       onResult(result); setUrl('')
     } catch (e) {
@@ -494,23 +494,31 @@ function CrawlHUD({ onClose, onResult, profile, defaultPos = { x: 28, y: 28 } })
               {loading ? <span style={spinner} /> : mode === 'article' ? <><Icon name="download" size={12} style={{ marginRight: 5 }} />Crawl</> : <><Icon name="zoom-code" size={12} style={{ marginRight: 5 }} />Analyze</>}
             </button>
           </div>
-          {mode === 'article' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Icon name="folder" size={12} style={{ color: '#444455' }} />
-                <span style={optText}>Folder</span>
-                <input style={{ ...hudInput, flex: 1, padding: '5px 10px', fontSize: 11 }} value={folder} onChange={e => setFolder(e.target.value)} />
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span style={optText}>Depth</span>
-                {[['surface', 'waves', 'Surface'], ['deep_dive', 'microscope', 'Deep dive']].map(([val, icon, label]) => (
-                  <label key={val} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-                    <input type="radio" name="depth" value={val} checked={crawlMode === val} onChange={() => setCrawlMode(val)} style={{ accentColor: '#1a8f7a' }} />
-                    <Icon name={icon} size={11} style={{ color: '#8888aa' }} />
-                    <span style={optText}>{label}</span>
-                  </label>
-                ))}
-              </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              {/* Folder — articles only */}
+              {mode === 'article' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Icon name="folder" size={12} style={{ color: '#444455' }} />
+                  <span style={optText}>Folder</span>
+                  <input style={{ ...hudInput, flex: 1, padding: '5px 10px', fontSize: 11 }} value={folder} onChange={e => setFolder(e.target.value)} />
+                </div>
+              )}
+
+              {/* Depth — articles only */}
+              {mode === 'article' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={optText}>Depth</span>
+                  {[['surface', 'waves', 'Surface'], ['deep_dive', 'microscope', 'Deep dive']].map(([val, icon, label]) => (
+                    <label key={val} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+                      <input type="radio" name="depth" value={val} checked={crawlMode === val} onChange={() => setCrawlMode(val)} style={{ accentColor: '#1a8f7a' }} />
+                      <Icon name={icon} size={11} style={{ color: '#8888aa' }} />
+                      <span style={optText}>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {/* Claude toggle — both modes */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                   <input type="checkbox" checked={useClaude} onChange={e => setUseClaude(e.target.checked)} style={{ accentColor: '#1a8f7a' }} />
@@ -518,10 +526,12 @@ function CrawlHUD({ onClose, onResult, profile, defaultPos = { x: 28, y: 28 } })
                   <span style={{ ...optText, color: '#c8c7d8', fontWeight: 700 }}>Use Claude</span>
                 </label>
                 <span style={proBadge}>PRO</span>
+                {mode === 'project' && useClaude && (
+                  <span style={{ fontSize: 10, color: '#444455', marginLeft: 4 }}>adds architecture, tradeoffs, use cases</span>
+                )}
               </div>
               {useClaude && <input style={{ ...hudInput, fontSize: 11 }} type="password" placeholder="sk-ant-… your Anthropic key" value={claudeKey} onChange={e => setClaudeKey(e.target.value)} />}
             </div>
-          )}
           {error && <div style={errorBox}><Icon name="alert-circle" size={12} style={{ marginRight: 6, flexShrink: 0 }} />{error}</div>}
         </div>
       )}

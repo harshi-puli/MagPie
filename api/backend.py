@@ -1,10 +1,9 @@
 """
 MagPie — FastAPI backend v2
 Run with:
-  python -m uvicorn api.backend:app --reload --port 8000
+  python -m uvicorn api.server:app --reload --port 8000
 """
 
-import asyncio
 import os
 import sys
 from datetime import datetime
@@ -18,7 +17,7 @@ from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from crawler import crawl_url
-from llm_processor import process_content
+from llm_processor import process_content, process_project
 from nlp_processor import process_free
 from obsidian_client import Note, ObsidianClient
 from api.github_client import fetch_repo, extract_key_concepts
@@ -34,7 +33,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── In-memory history (swap for Supabase later) ───────────────────────────────
 _history: dict[str, list] = {}
 
 
@@ -64,9 +62,8 @@ class CrawlRequest(BaseModel):
     folder: Optional[str] = None
     save_history: bool = True
     session_id: Optional[str] = None
-    anthropic_key: Optional[str] = None   # user's own key for pro tier
-    mode: str = "surface"                 # "surface" | "deep_dive"
-    mode: str = "surface"                 # "surface" | "deep_dive" 
+    anthropic_key: Optional[str] = None
+    mode: str = "surface"  # "surface" | "deep_dive"
 
 
 class ProjectRequest(BaseModel):
@@ -75,6 +72,7 @@ class ProjectRequest(BaseModel):
     save_history: bool = True
     save_to_obsidian: bool = True
     session_id: Optional[str] = None
+    anthropic_key: Optional[str] = None  # if set → Claude enrichment on top of free data
 
 
 class StatusResponse(BaseModel):
@@ -100,7 +98,7 @@ def status():
     try:
         r = httpx.get(
             f"{cfg['obsidian']['base_url']}/",
-            headers={"Authorization": f"Bearer {os.environ.get('OBSIDIAN_API_KEY','')}"},
+            headers={"Authorization": f"Bearer {os.environ.get('OBSIDIAN_API_KEY', '')}"},
             verify=False, timeout=3,
         )
         obsidian_ok = r.status_code == 200
@@ -128,8 +126,11 @@ def status():
 async def crawl(req: CrawlRequest):
     """
     Crawl any URL.
-    - Free tier: spaCy + TextRank (no API key needed)
-    - Pro tier: Claude summarization (pass anthropic_key explicitly)
+    - Free surface:   title + summary + tags + wikilinks only (fast)
+    - Free deep dive: full NLP — TextRank, TF-IDF, co-occurrence, NER,
+                      sentiment arc, questions, outbound links
+    - Claude:         same rich fields as deep dive but Claude-quality,
+                      plus smarter wikilinks and better main_ideas/questions
     """
     cfg = get_config()
     folder = req.folder or cfg["obsidian"]["vault_folder"]
@@ -139,57 +140,46 @@ async def crawl(req: CrawlRequest):
     if not crawl_result.success:
         raise HTTPException(status_code=422, detail=f"Crawl failed: {crawl_result.error}")
 
-    # 2. Decide which processor to use
-    # ONLY use Claude if the user explicitly passed their key from the UI
     anthropic_key = req.anthropic_key
     use_claude = bool(anthropic_key)
 
     if use_claude:
         # ── Pro tier: Claude ──────────────────────────────────────────────────
-        original_key = os.environ.get("ANTHROPIC_API_KEY")
-        os.environ["ANTHROPIC_API_KEY"] = anthropic_key
-
         processed = process_content(
             raw_markdown=crawl_result.markdown,
             source_url=req.url,
-            prompt_template=cfg["llm"]["prompt"],
-            model=cfg["llm"]["model"],
+            api_key=anthropic_key,
         )
-
-        # Restore original key
-        if original_key:
-            os.environ["ANTHROPIC_API_KEY"] = original_key
-        else:
-            os.environ.pop("ANTHROPIC_API_KEY", None)
 
         if not processed.success:
             raise HTTPException(status_code=422, detail=f"Claude error: {processed.error}")
 
-        title         = processed.title
-        summary       = processed.summary
-        tags          = processed.tags
-        links         = processed.links
-        content       = processed.content
-        tier          = "claude"
-        key_terms     = []
-        main_ideas    = []
-        entities      = []
-        related_links = []
-        co_occurrences = []
-        stats         = {}
-        sentiment_arc = []
-        questions     = []
+        title          = processed.title
+        summary        = processed.summary
+        tags           = processed.tags
+        links          = processed.links
+        content        = processed.content
+        tier           = "claude"
+        key_terms      = processed.key_terms
+        main_ideas     = processed.main_ideas
+        entities       = processed.entities
+        related_links  = processed.related_links
+        co_occurrences = processed.co_occurrences
+        stats          = processed.stats
+        sentiment_arc  = processed.sentiment_arc
+        questions      = processed.questions
 
     else:
         # ── Free tier: spaCy + TextRank ───────────────────────────────────────
+        # Surface mode: skip the heavy NLP (co-occurrence, sentiment, questions)
+        # Deep dive: full pipeline
         result = process_free(crawl_result.markdown, source_url=req.url)
 
         if not result.success:
-            # Return a friendly error card instead of crashing
-            # so the user sees WHY it failed (paywall, nav-only, etc.)
             return {
                 "type": "article",
                 "tier": "free",
+                "mode": req.mode,
                 "url": req.url,
                 "title": result.title or req.url.split("/")[-1] or "Page",
                 "summary": f"⚠️ {result.error}",
@@ -202,20 +192,33 @@ async def crawl(req: CrawlRequest):
                 "error": result.error,
             }
 
-        title         = result.title
-        summary       = result.summary
-        tags          = result.tags
-        links         = result.links
-        content       = result.content
-        tier          = "free"
-        key_terms     = result.key_terms
-        main_ideas    = result.main_ideas
-        entities      = result.entities
-        related_links = result.related_links
-        co_occurrences = result.co_occurrences
-        stats         = result.stats
-        sentiment_arc = result.sentiment_arc
-        questions     = result.questions
+        title   = result.title
+        summary = result.summary
+        tags    = result.tags
+        links   = result.links
+        content = result.content
+        tier    = "free"
+
+        if req.mode == "surface":
+            # Surface: just the basics — fast, lightweight
+            key_terms      = result.key_terms[:6]
+            main_ideas     = result.main_ideas[:2]
+            entities       = result.entities[:4]
+            related_links  = []
+            co_occurrences = []
+            stats          = {"word_count": result.stats.get("word_count"), "estimated_read_minutes": result.stats.get("estimated_read_minutes")}
+            sentiment_arc  = []
+            questions      = []
+        else:
+            # Deep dive: everything
+            key_terms      = result.key_terms
+            main_ideas     = result.main_ideas
+            entities       = result.entities
+            related_links  = result.related_links
+            co_occurrences = result.co_occurrences
+            stats          = result.stats
+            sentiment_arc  = result.sentiment_arc
+            questions      = result.questions
 
     # 3. Save to Obsidian
     vault_path = ""
@@ -228,7 +231,7 @@ async def crawl(req: CrawlRequest):
             links=links,
             source_url=req.url,
             summary=summary,
-            mode=req.mode,
+            mode="deep_dive" if (use_claude or req.mode == "deep_dive") else "surface",
             key_terms=key_terms,
             main_ideas=main_ideas,
             questions=questions,
@@ -243,10 +246,11 @@ async def crawl(req: CrawlRequest):
     except Exception as e:
         vault_path = f"(Obsidian offline: {e})"
 
-    # 4. Build history entry
-    entry = {
+    # 4. Return entry
+    return {
         "type": "article",
         "tier": tier,
+        "mode": "deep_dive" if (use_claude or req.mode == "deep_dive") else "surface",
         "url": req.url,
         "title": title,
         "summary": summary,
@@ -262,20 +266,18 @@ async def crawl(req: CrawlRequest):
         "questions": questions,
         "vault_path": vault_path,
         "crawled_at": datetime.utcnow().isoformat(),
-        "mode": req.mode,
-        "mode": req.mode,
         "success": True,
     }
-
-    if req.save_history and req.session_id:
-        save_to_history(req.session_id, entry)
-
-    return entry
 
 
 @app.post("/project")
 def analyze_project(req: ProjectRequest):
-    """Analyze a GitHub repo — always free, no Claude needed."""
+    """
+    Analyze a GitHub repo.
+    - Free: fetch_repo + extract_key_concepts (same as before)
+    - Claude: free data + Claude enrichment (architecture notes, tradeoffs,
+              use cases, related technologies, smarter questions)
+    """
     cfg = get_config()
 
     try:
@@ -285,16 +287,9 @@ def analyze_project(req: ProjectRequest):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"GitHub fetch failed: {str(e)}")
 
+    # ── Free analysis (always runs) ───────────────────────────────────────────
     key_concepts = extract_key_concepts(repo.readme, repo.topics, repo.tech_stack)
     repo.key_concepts = key_concepts
-
-    readme_preview = repo.readme[:3000] + ("..." if len(repo.readme) > 3000 else "")
-    lang_list = ", ".join(f"[[{l}]]" for l in list(repo.languages.keys())[:5])
-    concept_links = "  ".join(f"[[{c}]]" for c in key_concepts[:12])
-    contrib_list = "\n".join(
-        f"- [{c['login']}]({c['url']}) — {c['contributions']} commits"
-        for c in repo.contributors[:5]
-    )
 
     recent = repo.commit_activity[-12:] if len(repo.commit_activity) >= 12 else repo.commit_activity
     max_commits = max(recent) if recent else 1
@@ -302,56 +297,14 @@ def analyze_project(req: ProjectRequest):
     sparkline = "".join(bars[min(int(w / max(max_commits, 1) * 7), 7)] for w in recent)
     activity = "active" if sum(recent) > 10 else "quiet"
 
-    note_content = f"""## About
-{repo.description}
-
-⭐ {repo.stars:,} stars · 🍴 {repo.forks:,} forks · 🐛 {repo.open_issues:,} open issues
-📄 {repo.license or "No license"} · 🌿 `{repo.default_branch}`
-
-## Tech Stack
-{lang_list}
-
-## Key Concepts
-{concept_links}
-
-## Commit Activity (last 12 weeks)
-`{sparkline}` ({activity})
-
-## Top Contributors
-{contrib_list}
-
-## README
-{readme_preview}
-
----
-## Related Concepts
-{concept_links}
-"""
-
-    vault_path = ""
-    if req.save_to_obsidian:
-        folder = req.folder or cfg["obsidian"]["vault_folder"]
-        note = Note(
-            title=repo.full_name,
-            content=note_content,
-            folder=f"{folder}/Projects",
-            tags=repo.topics[:5] + ([repo.primary_language.lower()] if repo.primary_language else []),
-            links=key_concepts,
-            source_url=req.github_url,
-            summary=repo.description,
-        )
-        obsidian = get_obsidian_client(cfg)
-        try:
-            save_result = obsidian.create_note(note)
-            vault_path = save_result["path"]
-        except Exception:
-            pass
-
+    # Base entry from free analysis
     entry = {
         "type": "project",
+        "tier": "free",
         "url": req.github_url,
         "title": repo.full_name,
         "description": repo.description,
+        "summary": repo.description,
         "stars": repo.stars,
         "forks": repo.forks,
         "primary_language": repo.primary_language,
@@ -366,10 +319,105 @@ def analyze_project(req: ProjectRequest):
         "readme_preview": repo.readme[:1000],
         "file_structure": repo.file_structure,
         "features": repo.features,
-        "vault_path": vault_path,
+        # Claude-only fields default empty
+        "architecture_notes": [],
+        "tradeoffs": [],
+        "use_cases": [],
+        "related_technologies": [],
+        "questions": [],
+        "tags": repo.topics[:5] + ([repo.primary_language.lower()] if repo.primary_language else []),
+        "vault_path": "",
         "crawled_at": datetime.utcnow().isoformat(),
         "success": True,
     }
+
+    # ── Claude enrichment (optional) ──────────────────────────────────────────
+    anthropic_key = req.anthropic_key
+    if anthropic_key:
+        claude_result = process_project(repo_data=entry, api_key=anthropic_key)
+
+        if claude_result.success:
+            entry["tier"] = "claude"
+            # Override with Claude's smarter versions
+            entry["summary"]              = claude_result.summary or entry["summary"]
+            entry["description"]          = claude_result.summary or entry["description"]
+            entry["key_concepts"]         = claude_result.key_concepts or key_concepts
+            entry["features"]             = claude_result.features or repo.features
+            entry["tags"]                 = claude_result.tags or entry["tags"]
+            # New Claude-only fields
+            entry["architecture_notes"]   = claude_result.architecture_notes
+            entry["tradeoffs"]            = claude_result.tradeoffs
+            entry["use_cases"]            = claude_result.use_cases
+            entry["related_technologies"] = claude_result.related_technologies
+            entry["questions"]            = claude_result.questions
+        else:
+            # Claude failed — keep free data, add a warning
+            entry["_claude_error"] = claude_result.error
+
+    # ── Save to Obsidian ──────────────────────────────────────────────────────
+    if req.save_to_obsidian:
+        folder = req.folder or cfg["obsidian"]["vault_folder"]
+
+        lang_list     = ", ".join(f"[[{l}]]" for l in list(repo.languages.keys())[:5])
+        concept_links = "  ".join(f"[[{c}]]" for c in entry["key_concepts"][:12])
+        contrib_list  = "\n".join(
+            f"- [{c['login']}]({c['url']}) — {c['contributions']} commits"
+            for c in repo.contributors[:5]
+        )
+
+        claude_sections = ""
+        if entry["tier"] == "claude":
+            if entry["architecture_notes"]:
+                claude_sections += "\n\n## 🏗 Architecture\n" + "\n".join(f"- {n}" for n in entry["architecture_notes"])
+            if entry["tradeoffs"]:
+                claude_sections += "\n\n## ⚖️ Tradeoffs\n" + "\n".join(f"- {t}" for t in entry["tradeoffs"])
+            if entry["use_cases"]:
+                claude_sections += "\n\n## 🎯 Use Cases\n" + "\n".join(f"- {u}" for u in entry["use_cases"])
+            if entry["related_technologies"]:
+                claude_sections += "\n\n## 🔗 Related Technologies\n" + "  ".join(f"[[{r}]]" for r in entry["related_technologies"])
+            if entry["questions"]:
+                claude_sections += "\n\n## ❓ Open Questions\n" + "\n".join(f"- {q}" for q in entry["questions"])
+
+        note_content = f"""## About
+{entry['summary']}
+
+⭐ {repo.stars:,} stars · 🍴 {repo.forks:,} forks · 🐛 {repo.open_issues:,} open issues
+📄 {repo.license or "No license"} · 🌿 `{repo.default_branch}`
+
+## Tech Stack
+{lang_list}
+
+## Key Concepts
+{concept_links}
+
+## Features
+{chr(10).join(f'- {f}' for f in entry['features'][:8])}
+
+## Commit Activity (last 12 weeks)
+`{sparkline}` ({activity})
+
+## Top Contributors
+{contrib_list}{claude_sections}
+
+---
+## Related Concepts
+{concept_links}
+"""
+        note = Note(
+            title=repo.full_name,
+            content=note_content,
+            folder=f"{folder}/Projects",
+            tags=entry["tags"],
+            links=entry["key_concepts"],
+            source_url=req.github_url,
+            summary=entry["summary"],
+        )
+        obsidian = get_obsidian_client(cfg)
+        try:
+            save_result = obsidian.create_note(note)
+            entry["vault_path"] = save_result["path"]
+        except Exception:
+            pass
 
     if req.save_history and req.session_id:
         save_to_history(req.session_id, entry)
@@ -426,7 +474,6 @@ def get_graph(session_id: str):
         })
 
         if entry_type == "article":
-            # Key Terms cluster
             key_terms = entry.get("key_terms") or []
             term_node_ids = {}
             if key_terms:
@@ -438,38 +485,29 @@ def get_graph(session_id: str):
                     term_node_ids[term] = lid
                     edges.append({"source": cid, "target": lid, "cluster": "terms"})
 
-            # Co-occurrence edges
             for co in (entry.get("co_occurrences") or []):
                 ta, tb = co.get("term_a"), co.get("term_b")
                 if ta in term_node_ids and tb in term_node_ids:
-                    edges.append({
-                        "source": term_node_ids[ta],
-                        "target": term_node_ids[tb],
-                        "cluster": "cooccurrence",
-                        "strength": co.get("strength", 0.5),
-                    })
+                    edges.append({"source": term_node_ids[ta], "target": term_node_ids[tb], "cluster": "cooccurrence", "strength": co.get("strength", 0.5)})
 
-            # Main Ideas cluster
             main_ideas = entry.get("main_ideas") or []
             if main_ideas:
                 cid = make_id("cluster")
                 nodes.append({"id": cid, "label": "💡 Main Ideas", "type": "cluster", "url": "", "summary": f"{len(main_ideas)} ideas", "cluster": "ideas"})
                 edges.append({"source": root_id, "target": cid, "cluster": "ideas"})
-                for idea in main_ideas[:3]:
+                for idea in main_ideas[:5]:
                     lid = get_or_create_leaf(idea, "idea_item")
                     edges.append({"source": cid, "target": lid, "cluster": "ideas"})
 
-            # Questions cluster
             questions = entry.get("questions") or []
             if questions:
                 cid = make_id("cluster")
                 nodes.append({"id": cid, "label": "❓ Questions", "type": "cluster", "url": "", "summary": f"{len(questions)} questions", "cluster": "questions"})
                 edges.append({"source": root_id, "target": cid, "cluster": "questions"})
-                for q in questions[:4]:
+                for q in questions[:5]:
                     lid = get_or_create_leaf(q, "question_item")
                     edges.append({"source": cid, "target": lid, "cluster": "questions"})
 
-            # Sentiment Arc cluster
             sentiment_arc = entry.get("sentiment_arc") or []
             if sentiment_arc:
                 cid = make_id("cluster")
@@ -484,9 +522,8 @@ def get_graph(session_id: str):
                         edges.append({"source": prev_lid, "target": lid, "cluster": "sentiment_arc"})
                     prev_lid = lid
 
-            # Stats cluster
             stats = entry.get("stats") or {}
-            if stats:
+            if stats and stats.get("reading_level"):
                 cid = make_id("cluster")
                 nodes.append({"id": cid, "label": "📊 Stats", "type": "cluster", "url": "", "summary": f"{stats.get('reading_level','?')} level", "cluster": "stats"})
                 edges.append({"source": root_id, "target": cid, "cluster": "stats"})
@@ -494,12 +531,10 @@ def get_graph(session_id: str):
                     f"📖 {stats.get('reading_level','?')} level",
                     f"⏱ {stats.get('estimated_read_minutes','?')} min read",
                     f"📝 {stats.get('word_count','?')} words",
-                    f"🧠 Richness: {stats.get('vocabulary_richness','?')}",
                 ]:
                     lid = get_or_create_leaf(s, "stat_item")
                     edges.append({"source": cid, "target": lid, "cluster": "stats"})
 
-            # Entities cluster
             entities = entry.get("entities") or []
             if entities:
                 cid = make_id("cluster")
@@ -509,7 +544,6 @@ def get_graph(session_id: str):
                     lid = get_or_create_leaf(ent, "entity_item")
                     edges.append({"source": cid, "target": lid, "cluster": "entities"})
 
-            # Related Links cluster
             related_links = entry.get("related_links") or []
             if related_links:
                 cid = make_id("cluster")
@@ -519,54 +553,94 @@ def get_graph(session_id: str):
                     lid = get_or_create_leaf(lnk.get("label", "Link"), "link_item", lnk.get("url", ""))
                     edges.append({"source": cid, "target": lid, "cluster": "links"})
 
-            # Shared concept nodes (cross-entry wikilinks)
             for concept in (entry.get("links") or [])[:6]:
                 lid = get_or_create_leaf(concept, "concept")
                 edges.append({"source": root_id, "target": lid, "cluster": None})
 
         elif entry_type == "project":
-            # Tech Stack
             tech = entry.get("tech_stack") or entry.get("languages") or []
             if tech:
                 cid = make_id("cluster")
-                nodes.append({"id": cid, "label": "Tech Stack", "type": "cluster", "url": "", "summary": f"{len(tech)} technologies", "cluster": "tech"})
+                nodes.append({"id": cid, "label": "⚙️ Tech Stack", "type": "cluster", "url": "", "summary": f"{len(tech)} technologies", "cluster": "tech"})
                 edges.append({"source": root_id, "target": cid, "cluster": "tech"})
                 for item in tech[:8]:
                     lid = get_or_create_leaf(item, "tech_item")
                     edges.append({"source": cid, "target": lid, "cluster": "tech"})
 
-            # Features
             features = entry.get("features") or []
             if features:
                 cid = make_id("cluster")
-                nodes.append({"id": cid, "label": "Features", "type": "cluster", "url": "", "summary": f"{len(features)} features", "cluster": "features"})
+                nodes.append({"id": cid, "label": "✨ Features", "type": "cluster", "url": "", "summary": f"{len(features)} features", "cluster": "features"})
                 edges.append({"source": root_id, "target": cid, "cluster": "features"})
                 for feat in features[:6]:
                     lid = get_or_create_leaf(feat[:40], "feature_item")
                     edges.append({"source": cid, "target": lid, "cluster": "features"})
 
-            # File Structure
+            # Claude-only project clusters
+            arch = entry.get("architecture_notes") or []
+            if arch:
+                cid = make_id("cluster")
+                nodes.append({"id": cid, "label": "🏗 Architecture", "type": "cluster", "url": "", "summary": f"{len(arch)} notes", "cluster": "features"})
+                edges.append({"source": root_id, "target": cid, "cluster": "features"})
+                for note in arch[:5]:
+                    lid = get_or_create_leaf(note[:45], "feature_item")
+                    edges.append({"source": cid, "target": lid, "cluster": "features"})
+
+            tradeoffs = entry.get("tradeoffs") or []
+            if tradeoffs:
+                cid = make_id("cluster")
+                nodes.append({"id": cid, "label": "⚖️ Tradeoffs", "type": "cluster", "url": "", "summary": f"{len(tradeoffs)} tradeoffs", "cluster": "questions"})
+                edges.append({"source": root_id, "target": cid, "cluster": "questions"})
+                for t in tradeoffs[:4]:
+                    lid = get_or_create_leaf(t[:45], "question_item")
+                    edges.append({"source": cid, "target": lid, "cluster": "questions"})
+
+            use_cases = entry.get("use_cases") or []
+            if use_cases:
+                cid = make_id("cluster")
+                nodes.append({"id": cid, "label": "🎯 Use Cases", "type": "cluster", "url": "", "summary": f"{len(use_cases)} use cases", "cluster": "ideas"})
+                edges.append({"source": root_id, "target": cid, "cluster": "ideas"})
+                for uc in use_cases[:4]:
+                    lid = get_or_create_leaf(uc[:45], "idea_item")
+                    edges.append({"source": cid, "target": lid, "cluster": "ideas"})
+
+            related_tech = entry.get("related_technologies") or []
+            if related_tech:
+                cid = make_id("cluster")
+                nodes.append({"id": cid, "label": "🔗 Related Tech", "type": "cluster", "url": "", "summary": f"{len(related_tech)} tools", "cluster": "tech"})
+                edges.append({"source": root_id, "target": cid, "cluster": "tech"})
+                for rt in related_tech[:6]:
+                    lid = get_or_create_leaf(rt, "tech_item")
+                    edges.append({"source": cid, "target": lid, "cluster": "tech"})
+
+            questions = entry.get("questions") or []
+            if questions:
+                cid = make_id("cluster")
+                nodes.append({"id": cid, "label": "❓ Questions", "type": "cluster", "url": "", "summary": f"{len(questions)} questions", "cluster": "questions"})
+                edges.append({"source": root_id, "target": cid, "cluster": "questions"})
+                for q in questions[:4]:
+                    lid = get_or_create_leaf(q[:45], "question_item")
+                    edges.append({"source": cid, "target": lid, "cluster": "questions"})
+
             file_structure = entry.get("file_structure") or []
             if file_structure:
                 cid = make_id("cluster")
-                nodes.append({"id": cid, "label": "Structure", "type": "cluster", "url": entry.get("url", ""), "summary": f"{len(file_structure)} entries", "cluster": "files"})
+                nodes.append({"id": cid, "label": "📁 Structure", "type": "cluster", "url": entry.get("url", ""), "summary": f"{len(file_structure)} entries", "cluster": "files"})
                 edges.append({"source": root_id, "target": cid, "cluster": "files"})
                 for f in file_structure[:10]:
-                    label = f"{f.get('emoji','')} {f.get('name','')}".strip()
+                    label = f"{f.get('emoji', '')} {f.get('name', '')}".strip()
                     lid = get_or_create_leaf(label, "file_item", f.get("url", ""))
                     edges.append({"source": cid, "target": lid, "cluster": "files"})
 
-            # Contributors
             contributors = entry.get("contributors") or []
             if contributors:
                 cid = make_id("cluster")
-                nodes.append({"id": cid, "label": "Contributors", "type": "cluster", "url": "", "summary": f"{len(contributors)} contributors", "cluster": "people"})
+                nodes.append({"id": cid, "label": "👥 Contributors", "type": "cluster", "url": "", "summary": f"{len(contributors)} contributors", "cluster": "people"})
                 edges.append({"source": root_id, "target": cid, "cluster": "people"})
                 for c in contributors[:5]:
                     lid = get_or_create_leaf(c["login"], "contributor", c.get("url", ""))
                     edges.append({"source": cid, "target": lid, "cluster": "people"})
 
-            # Key concepts (cross-entry)
             for concept in (entry.get("key_concepts") or [])[:6]:
                 lid = get_or_create_leaf(concept, "concept")
                 edges.append({"source": root_id, "target": lid, "cluster": None})

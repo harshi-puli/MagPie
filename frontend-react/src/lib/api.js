@@ -30,12 +30,13 @@ export async function crawlUrl({ url, folder, mode, anthropicKey, sessionId, sav
   })
 }
 
-export async function analyzeProject({ githubUrl, folder, sessionId, saveToObsidian = true, saveHistory = true }) {
+export async function analyzeProject({ githubUrl, folder, anthropicKey, sessionId, saveToObsidian = true, saveHistory = true }) {
   return request('/project', {
     method: 'POST',
     body: JSON.stringify({
       github_url: githubUrl,
       folder,
+      anthropic_key: anthropicKey || undefined,  // ← new
       session_id: sessionId,
       save_to_obsidian: saveToObsidian,
       save_history: saveHistory,
