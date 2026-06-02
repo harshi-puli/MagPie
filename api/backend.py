@@ -21,10 +21,15 @@ from llm_processor import process_content, process_project
 from nlp_processor import process_free
 from obsidian_client import Note, ObsidianClient
 from api.github_client import fetch_repo, extract_key_concepts
+from pathlib import Path
 
 load_dotenv()
 
 app = FastAPI(title="MagPie API", version="2.0.0")
+
+print("cwd =", os.getcwd())
+print("files in cwd =", os.listdir("."))
+print("files in /app =", os.listdir("/app"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,9 +40,10 @@ app.add_middleware(
 
 _history: dict[str, list] = {}
 
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 
 def get_config():
-    with open("config.yaml") as f:
+    with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
 
 
