@@ -1,9 +1,6 @@
 # Secrets
 .env
 
-# Personal config
-config.yaml
-
 # Python
 __pycache__/
 *.pyc
