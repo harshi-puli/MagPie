@@ -1,0 +1,42 @@
+obsidian:
+  base_url: "http://localhost:27123"  # Obsidian Local REST API default port
+  api_key: "your-obsidian-api-key"   # Set in Obsidian Local REST API plugin settings
+  vault_folder: "Web Clippings"       # Folder inside vault to save notes
+
+crawl:
+  max_depth: 2          # How deep to follow links (1 = just the given URL)
+  max_pages: 10         # Max pages to crawl per run
+  include_links: false  # Save discovered links in note frontmatter
+
+llm:
+  model: "claude-haiku-4-5" # Change to opus based on pricing constraints.
+  summarize: true       # Summarize content before saving
+  extract_tags: true    # Auto-generate tags from content
+  prompt: |
+    You are a knowledge curator. Given the following web page content, produce:
+    1. A concise title (one line)
+    2. A 2–3 sentence summary
+    3. 3–5 relevant tags (lowercase, hyphenated)
+    4. The cleaned main content in markdown
+    5. The cleaned main content in markdown — naturally weave [[wikilinks]] around key concepts,
+       people, tools, and topics as they appear in the text so Obsidian can build a knowledge graph.
+       Only link things genuinely worth connecting (not every word). Aim for 5–10 wikilinks per note.
+ 
+    Format your response EXACTLY as:
+    TITLE: <title>
+    SUMMARY: <summary>
+    TAGS: tag1, tag2, tag3
+    LINKS: Concept One, Concept Two, Concept Three
+    CONTENT:
+    <cleaned markdown content with [[wikilinks]] woven in naturally>
+
+    Format your response as:
+    TITLE: <title>
+    SUMMARY: <summary>
+    TAGS: tag1, tag2, tag3
+    CONTENT:
+    <cleaned markdown content>
+
+urls:
+  - https://example.com/article-1
+  - https://example.com/article-2
