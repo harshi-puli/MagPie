@@ -2,7 +2,13 @@ import React, { useState, useEffect, useRef } from 'react'
 import * as d3 from 'd3'
 import AuthModal from '../components/AuthModal'
 
-// ── Demo graph data ───────────────────────────────────────────────────────────
+// ── Backend ──────────────────────────────────────────────────────────────────
+// Public landing page demo always hits the free tier (no anthropic_key) and
+// never saves to a real session's history.
+const API = 'https://magpie-backend-119433849716.us-central1.run.app'
+const DEMO_SESSION_ID = 'landing_demo'
+
+// ── Preset graph data (shown before a real crawl happens) ─────────────────────
 
 const EXAMPLES = {
   attention: {
@@ -123,23 +129,68 @@ const EXAMPLES = {
   },
 }
 
-const NODE_COLOR = { article: '#1a8f7a', concept: '#c97a20', entity: '#7b5ea7', term: '#2a7a9a' }
-const NODE_R     = { article: 18, concept: 11, entity: 10, term: 8 }
+const NODE_COLOR = {
+  article: '#1a8f7a', concept: '#c97a20', entity: '#7b5ea7', term: '#2a7a9a',
+  // real-crawl types (from /crawl response, mirrors GraphView.jsx)
+  entity_item: '#7b5ea7', term_item: '#2a7a9a', idea_item: '#2e7d6b',
+  link_item: '#1565c0', question_item: '#b06a00',
+}
+const NODE_R = {
+  article: 18, concept: 11, entity: 10, term: 8,
+  entity_item: 10, term_item: 8, idea_item: 9, link_item: 9, question_item: 9,
+}
+
+// ── Build a small graph from one real /crawl response ──────────────────────────
+// Mirrors GraphView.jsx's buildGraphData, simplified for a single live entry.
+function buildLiveGraph(entry) {
+  const nodes = [], edges = []
+  const seen = {}
+  let n = 0
+  const mkId = () => `n${n++}`
+
+  function leaf(label, type) {
+    const key = `${type}::${String(label).toLowerCase()}`
+    if (!seen[key]) {
+      seen[key] = mkId()
+      nodes.push({ id: seen[key], label: String(label), type })
+    }
+    return seen[key]
+  }
+
+  const rootId = mkId()
+  nodes.push({ id: rootId, label: entry.title || 'Untitled', type: 'article' })
+
+  ;(entry.key_terms || []).slice(0, 6).forEach(t => edges.push({ s: rootId, t: leaf(t, 'term_item') }))
+  ;(entry.main_ideas || []).slice(0, 4).forEach(i => edges.push({ s: rootId, t: leaf(i, 'idea_item') }))
+  ;(entry.entities || []).slice(0, 5).forEach(e => edges.push({ s: rootId, t: leaf(e, 'entity_item') }))
+  ;(entry.links || []).slice(0, 6).forEach(l => edges.push({ s: rootId, t: leaf(l, 'link_item') }))
+  ;(entry.questions || []).slice(0, 3).forEach(q => edges.push({ s: rootId, t: leaf(q, 'question_item') }))
+
+  return {
+    title: entry.title || 'Untitled',
+    url: entry.url || '',
+    tags: entry.tags || [],
+    nodes,
+    edges,
+  }
+}
 
 // ── DemoGraph component ────────────────────────────────────────────────────────
 
 function DemoGraph({ onSignIn }) {
   const [activeKey, setActiveKey] = useState('attention')
+  const [liveData, setLiveData]   = useState(null) // real crawl result, once fetched
   const [inputUrl, setInputUrl]   = useState('')
   const [loading, setLoading]     = useState(false)
+  const [error, setError]         = useState('')
   const svgRef      = useRef(null)
   const containerRef = useRef(null)
   const simRef      = useRef(null)
   const tooltipRef  = useRef(null)
 
-  const data = EXAMPLES[activeKey]
+  const data = liveData || EXAMPLES[activeKey]
 
-  useEffect(() => { renderGraph(data) }, [activeKey])
+  useEffect(() => { renderGraph(data) }, [activeKey, liveData])
 
   function renderGraph(graphData) {
     if (!svgRef.current || !containerRef.current) return
@@ -221,18 +272,48 @@ function DemoGraph({ onSignIn }) {
     simRef.current = sim
   }
 
-  function handleAnalyze() {
+  async function handleAnalyze() {
     const url = inputUrl.trim()
+    if (!url) return
+    setError('')
+
+    // If it matches one of our presets exactly, just switch to it — no need to hit the backend.
     const match = Object.entries(EXAMPLES).find(([, ex]) => ex.url === url)
-    if (match) { setActiveKey(match[0]); setInputUrl(''); return }
+    if (match) { setLiveData(null); setActiveKey(match[0]); setInputUrl(''); return }
 
     setLoading(true)
-    setTimeout(() => {
-      const keys = Object.keys(EXAMPLES)
-      setActiveKey(keys[Math.floor(Math.random() * keys.length)])
+    try {
+      const res = await fetch(`${API}/crawl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          save_history: false,
+          session_id: DEMO_SESSION_ID,
+          // No anthropic_key — public demo always uses the free NLP tier.
+        }),
+      })
+
+      const json = await res.json().catch(() => null)
+
+      if (!res.ok || !json || json.success === false) {
+        const msg = json?.detail || json?.summary || 'Could not extract that page. Try a direct article URL — paywalled or nav-only pages won\'t work.'
+        throw new Error(msg)
+      }
+
+      setLiveData(buildLiveGraph(json))
       setInputUrl('')
+    } catch (e) {
+      setError(e.message || 'Something went wrong analyzing that URL.')
+    } finally {
       setLoading(false)
-    }, 1200)
+    }
+  }
+
+  function showPreset(key) {
+    setLiveData(null)
+    setError('')
+    setActiveKey(key)
   }
 
   return (
@@ -259,8 +340,8 @@ function DemoGraph({ onSignIn }) {
         {Object.entries(EXAMPLES).map(([key, ex]) => (
           <button
             key={key}
-            style={{ ...demoStyles.pill, ...(activeKey === key ? demoStyles.pillActive : {}) }}
-            onClick={() => setActiveKey(key)}
+            style={{ ...demoStyles.pill, ...(!liveData && activeKey === key ? demoStyles.pillActive : {}) }}
+            onClick={() => showPreset(key)}
           >
             {ex.title}
           </button>
@@ -275,19 +356,24 @@ function DemoGraph({ onSignIn }) {
 
         {/* Tag strip */}
         <div style={demoStyles.tagStrip}>
-          <span style={{ ...demoStyles.tag, ...demoStyles.tagArticle }}>{data.title}</span>
-          {data.tags.map(t => (
+          <span style={{ ...demoStyles.tag, ...demoStyles.tagArticle }}>
+            {data.title}{liveData ? ' · live' : ''}
+          </span>
+          {(data.tags || []).map(t => (
             <span key={t} style={{ ...demoStyles.tag, ...demoStyles.tagTerm }}>#{t}</span>
           ))}
         </div>
       </div>
+
+      {/* Error message */}
+      {error && <div style={demoStyles.errorBox}>{error}</div>}
 
       {/* URL input row */}
       <div style={demoStyles.inputRow}>
         <input
           style={demoStyles.urlInput}
           type="text"
-          placeholder="Paste your own URL to analyze…"
+          placeholder="Paste a real article URL to analyze…"
           value={inputUrl}
           onChange={e => setInputUrl(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleAnalyze()}
@@ -422,6 +508,17 @@ const demoStyles = {
     background: 'rgba(255,255,255,.04)',
     color: '#444455',
     border: '1px solid rgba(255,255,255,.07)',
+  },
+
+  errorBox: {
+    margin: '0 20px',
+    padding: '10px 14px',
+    background: 'rgba(192,57,43,0.1)',
+    border: '1px solid rgba(192,57,43,0.3)',
+    borderRadius: 9,
+    color: '#e07a6f',
+    fontSize: 12,
+    fontFamily: 'Syne, sans-serif',
   },
 
   inputRow: {
